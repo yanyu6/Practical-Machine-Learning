@@ -1,0 +1,162 @@
+---
+title: "Application of Practical Machine Learning Models in a Human Activity Recognition Example"
+author: "Yan Yu"
+date: "May 5, 2016"
+output: html_document
+---
+##Executive Summary
+The goal of this project is to predict the manner in which people did the exercise. Our outcome is the "classe" variable in the training set. In this report, after we load the data sets, we first do data cleaning, cross validtaion, and preprocessing. Then we build a tree model, a boosting with tree model, and a random forest model. Among those three models, the random forest model has the highest overall accuracy(0.9922). Thus, we choose the random forest model as our final model and use it to predict 20 different test cases.
+
+##Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+##Data Loading and Cleaning
+We first download the training and test data sets for this project and read them into the defined data files.
+```{r, results = 'hide'}
+#------------------------------------
+setwd("F:/coursera/Machine Learning")
+#-------------------------------------
+
+if(!file.exists("./training.csv")){
+  fileUrl1 <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(fileUrl1, destfile = "./training.csv")
+}
+
+if(!file.exists("./testing.csv")){
+  fileUrl2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(fileUrl2, destfile = "./testing.csv")
+}
+
+#-----------------------------------
+training <- read.csv("F:/coursera/Machine Learning/training.csv", na.strings = c("NA","#DIV/0!", ""), stringsAsFactors = FALSE)
+testing <- read.csv("F:/coursera/Machine Learning/testing.csv", na.strings = c("NA","#DIV/0!", ""), stringsAsFactors = FALSE)
+head(training)
+summary(training)
+```
+
+Then, we load the required libraries.
+```{r, message=FALSE}
+library(caret)
+library(randomForest)
+library(rattle)
+library(knitr)
+knitr::opts_chunk$set(cache=TRUE)
+```
+After we look at the summary of data, we notice that there are a lot of NAs in both the training and testing sets. We just randomly set that if the percentage of NAs in one varialbe is larger than 80% threshold, we will remove that variable.
+```{r, results='hide'}
+indexNA <- sapply(training, is.na)
+perNA <- colSums(indexNA)/dim(training)[1]
+indexNA2 <- perNA >0.8
+trainingRNA <- training[, !indexNA2]
+dim(trainingRNA)
+summary(trainingRNA)
+str(trainingRNA)
+```
+
+We also drop the first seven variables including X(data ids), user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, and num_window. Since the goal of the project is to quantify how well a specific activity people do it, the first several variables may interfere with proper classification.
+We aslo change the property of outcome(classe) as a factor.
+```{r, results='hide'}
+trainingcl <- subset(trainingRNA, select = -c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2,
+                               cvtd_timestamp, new_window, num_window))
+trainingcl$classe <- as.factor(trainingcl$classe)
+str(trainingcl)
+```
+
+Therefore, our final training set only includes 53 features. We need to do the same cleaning process for the testing set as the training set.
+```{r}
+cleanindex <- colnames(trainingcl[, -53])
+cleanindex2 <- c(cleanindex, "problem_id")
+testing <- subset(testing, select = cleanindex2)
+```
+
+##Data Partition and Cross Validation
+We plan to use cross validation in two ways. First, we notice that the last variable of testing data is not "classe" but "problem_id". We cannot use it so far to validate our models. Therefore, we do partition to the training set (60% for mytraining and 40% for mytesting). In this way, we can use mytesting to evaluate, repeat or average the estimated errors.
+```{r}
+inTrain <- createDataPartition(trainingcl$classe, p = 0.6, list = FALSE)
+mytraining <- trainingcl[inTrain, ]
+mytesting <- trainingcl[-inTrain, ]
+```
+Second, we can also use 3-fold cross validation in caret package by setting trainControl argument.
+
+##Preprocessing
+In this part, we first check the feature's variance by using nearZeroVar in caret package.
+```{r, results='hide'}
+nZV <- nearZeroVar(mytraining, saveMetrics = T)
+nZV
+```
+The checking results show that all the features in our mytraining set have enough variance.
+Then, we check the level of our outcome "classe" and calcuate the correlation matrix between features.
+```{r}
+table(mytraining$classe)
+```
+
+From the above able we can clearly see that features have realtively the same distribution among the five levels of outcome(A, B, C, D, and E).
+```{r}
+mytrainingcor <- mytraining[, 1:52]
+newclasse <- as.numeric(mytraining$classe)
+mytrainingcor <- cbind(mytrainingcor, newclasse)
+M <- abs(cor(mytrainingcor))
+diag(M) <- 0
+plot(M[, 53], col = "blue", ylab = "Correlation", main = "Correlation of features with classe")
+```
+
+From the above plot, we can see that the correlation between potential features and the outcome (classe) is not high. This indicates that linear regression or other kind of regression equations may not be considered here. 
+
+##Models
+For this classification example, I plan to first build a tree model, then a boosting with tree model, and finally a random forest model. I also use 3-fold cross validation for all three models. Before we start to build our models, we need to set seed first.
+```{r}
+set.seed(12345)
+```
+###Tree Model
+```{r, message=FALSE}
+modtree <- train(classe~., method ="rpart",data = mytraining, trControl = trainControl(method = "cv", number = 3) )
+predtree <- predict(modtree, mytesting)
+result1 <- confusionMatrix(predtree, mytesting$classe)
+result1$table
+result1$overall
+```
+The tree model generates a overall accuracy of 0.4884, with an expected error rate of 0.5116, which is not very good. From the above confusion matrix, we can clearly see the correct classifications of level B, C, and D are poor.
+
+###Boosting with Tree Model
+```{r,message=FALSE, results='hide'}
+modgbm <- train(classe~., method = "gbm", data = mytraining, trControl = trainControl(method = "cv", number = 3))
+predgbm <- predict(modgbm, mytesting)
+result2 <- confusionMatrix(predgbm, mytesting$classe)
+```
+```{r}
+result2$table
+result2$overall
+```
+The boosting with tree model generates an overall accuracy of 0.9610, with an expected error rate of 0.039, which is much better than the tree model. The confusion matrix shows the correct classifications mainly concentrate on the diagonal.
+
+###Random Forest Model
+```{r,message=FALSE}
+modrf <- train(classe~., method = "rf", data = mytraining, trControl = trainControl(method = "cv", number = 3))
+predrf <- predict(modrf, mytesting)
+result3 <-confusionMatrix(predrf, mytesting$classe)
+result3$table
+result3$overall
+```
+
+The random forest model generates a average accuracy of 0.9922, with an expected error rate of 0.0079, which is the best among those three models.
+Therefore, we decide to choose the random forest model as our final model. We show the feautres importance in the following figure. Less important features may be removed from the model in the future.
+```{r}
+print(plot(varImp(modrf, scale = FALSE)))
+```
+
+##Classification of Test Data
+```{r}
+finalpred <- predict(modrf, testing)
+finalpred
+```
+
+
+
+
+
+
+
+
+
+
+
